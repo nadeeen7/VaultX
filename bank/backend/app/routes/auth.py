@@ -1,17 +1,113 @@
+import secrets
 from datetime import datetime, timezone, timedelta
-from flask import Blueprint, request, jsonify, g
-from app.models import db, User, LoginAttempt, gen_uuid, utcnow
+from flask import Blueprint, request, jsonify, g, current_app
+import requests as http_requests
+import bcrypt as bcrypt_lib
+from app.models import db, User, LoginAttempt, OTP, gen_uuid, utcnow
 from app.auth import (
     hash_password, verify_password, create_token,
     get_client_ip, get_user_agent, token_required,
 )
 from app.services.account_service import create_account_for_user
+from app.services.email_service import send_otp_email
 from app.logging.security_logger import log_security_event, log_audit
-from flask import current_app
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
 
+# ──────────────────────────────────────────────
+# Helper: find or create user from Google profile
+# ──────────────────────────────────────────────
+def _find_or_create_google_user(google_user: dict) -> User:
+    """
+    Given a verified Google profile dict (sub, email, name, picture),
+    find an existing user by google_id or email, or create a new one.
+    """
+    google_id = google_user["sub"]
+    email = google_user["email"]
+    first_name = google_user.get("given_name", "")
+    last_name = google_user.get("family_name", "")
+
+    # 1. Check by google_id
+    user = User.query.filter_by(google_id=google_id).first()
+    if user:
+        return user
+
+    # 2. Check by email (user registered with email/password previously)
+    user = User.query.filter_by(email=email).first()
+    if user:
+        # Link the Google account to existing user
+        user.google_id = google_id
+        user.auth_provider = "google"
+        db.session.commit()
+        return user
+
+    # 3. Create a brand new user
+    # Generate a unique username from email
+    base_username = email.split("@")[0]
+    username = base_username
+    counter = 1
+    while User.query.filter_by(username=username).first():
+        username = f"{base_username}{counter}"
+        counter += 1
+
+    user = User(
+        id=gen_uuid(),
+        username=username,
+        email=email,
+        password_hash=None,  # No password for Google-only accounts
+        first_name=first_name or "Google",
+        last_name=last_name or "User",
+        role="user",
+        google_id=google_id,
+        auth_provider="google",
+    )
+    db.session.add(user)
+    db.session.commit()
+
+    # Create bank account with initial balance
+    create_account_for_user(user.id, initial_balance=5000.00)
+
+    log_security_event(
+        event_type="ACCOUNT_CREATED",
+        user_id=user.id,
+        username=user.username,
+        status="SUCCESS",
+        metadata={"email": user.email, "auth_provider": "google"},
+    )
+    log_audit(
+        action="CREATE",
+        resource_type="user",
+        resource_id=user.id,
+        user_id=user.id,
+        details={"username": user.username, "auth_provider": "google"},
+    )
+
+    return user
+
+
+# ──────────────────────────────────────────────
+# Helper: generate and hash a 6-digit OTP
+# ──────────────────────────────────────────────
+def _generate_otp() -> str:
+    """Generate a cryptographically secure 6-digit OTP."""
+    return f"{secrets.randbelow(1000000):06d}"
+
+
+def _hash_otp(otp: str) -> str:
+    """Hash an OTP using bcrypt."""
+    salt = bcrypt_lib.gensalt()
+    return bcrypt_lib.hashpw(otp.encode("utf-8"), salt).decode("utf-8")
+
+
+def _verify_otp(otp: str, otp_hash: str) -> bool:
+    """Verify an OTP against its bcrypt hash."""
+    return bcrypt_lib.checkpw(otp.encode("utf-8"), otp_hash.encode("utf-8"))
+
+
+# ──────────────────────────────────────────────
+# POST /api/auth/register
+# ──────────────────────────────────────────────
 @auth_bp.route("/register", methods=["POST"])
 def register():
     """Register a new user account."""
@@ -49,6 +145,7 @@ def register():
         first_name=data["first_name"],
         last_name=data["last_name"],
         role="user",
+        auth_provider="email",
     )
     db.session.add(user)
     db.session.commit()
@@ -81,6 +178,9 @@ def register():
     }), 201
 
 
+# ──────────────────────────────────────────────
+# POST /api/auth/login
+# ──────────────────────────────────────────────
 @auth_bp.route("/login", methods=["POST"])
 def login():
     """Authenticate a user and return a JWT."""
@@ -120,7 +220,7 @@ def login():
             user.failed_login_attempts = 0
             db.session.commit()
 
-    if not user or not verify_password(password, user.password_hash):
+    if not user or not user.password_hash or not verify_password(password, user.password_hash):
         # Log failed attempt
         login_attempt = LoginAttempt(
             user_id=user.id if user else None,
@@ -207,6 +307,337 @@ def login():
     }), 200
 
 
+# ──────────────────────────────────────────────
+# POST /api/auth/google — Google Sign-In
+# ──────────────────────────────────────────────
+@auth_bp.route("/google", methods=["POST"])
+def google_login():
+    """
+    Authenticate or register a user via Google Sign-In.
+    Expects: { "credential": "<Google ID token>" }
+    """
+    data = request.get_json()
+    if not data or not data.get("credential"):
+        return jsonify({"error": "Google credential is required"}), 400
+
+    credential = data["credential"]
+
+    # Verify the Google ID token
+    google_client_id = current_app.config.get("GOOGLE_CLIENT_ID", "")
+    if not google_client_id:
+        return jsonify({"error": "Google Sign-In is not configured"}), 503
+
+    try:
+        # Verify token via Google's tokeninfo endpoint
+        resp = http_requests.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": credential},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return jsonify({"error": "Invalid Google credential"}), 401
+
+        google_user = resp.json()
+
+        # Validate audience matches our client ID
+        if google_user.get("aud") != google_client_id:
+            return jsonify({"error": "Invalid Google credential audience"}), 401
+
+        # Validate token hasn't expired
+        exp = int(google_user.get("exp", 0))
+        if exp < datetime.now(timezone.utc).timestamp():
+            return jsonify({"error": "Google credential has expired"}), 401
+
+        # Validate email is verified
+        if not google_user.get("email_verified", False):
+            return jsonify({"error": "Google email is not verified"}), 401
+
+    except http_requests.RequestException:
+        return jsonify({"error": "Failed to verify Google credential"}), 502
+
+    # Find or create user
+    user = _find_or_create_google_user(google_user)
+
+    if not user.is_active:
+        return jsonify({"error": "Account is deactivated"}), 403
+
+    # Log successful login
+    login_attempt = LoginAttempt(
+        user_id=user.id,
+        username=user.username,
+        email=user.email,
+        success=True,
+        source_ip=get_client_ip(),
+        user_agent=get_user_agent(),
+    )
+    db.session.add(login_attempt)
+    db.session.commit()
+
+    log_security_event(
+        event_type="LOGIN_SUCCESS",
+        user_id=user.id,
+        username=user.username,
+        status="SUCCESS",
+        metadata={"source_ip": get_client_ip(), "auth_provider": "google"},
+    )
+
+    token = create_token(user.id, user.role)
+
+    return jsonify({
+        "message": "Google login successful",
+        "token": token,
+        "user": user.to_dict(),
+    }), 200
+
+
+# ──────────────────────────────────────────────
+# POST /api/auth/forgot-password — Request OTP
+# ──────────────────────────────────────────────
+@auth_bp.route("/forgot-password", methods=["POST"])
+def forgot_password():
+    """
+    Send a 6-digit OTP to the user's email for password reset.
+    Always returns success to prevent email enumeration.
+    """
+    data = request.get_json()
+    if not data or not data.get("email"):
+        return jsonify({"error": "Email is required"}), 400
+
+    email = data["email"].strip().lower()
+    user = User.query.filter_by(email=email).first()
+
+    # Always return the same response to prevent email enumeration
+    success_msg = {"message": "If that email is registered, a verification code has been sent."}
+
+    if not user:
+        # Don't reveal whether email exists
+        return jsonify(success_msg), 200
+
+    # Check if user has a password (Google-only accounts can't use this)
+    if not user.password_hash and user.auth_provider == "google":
+        return jsonify(success_msg), 200
+
+    # Rate limit: check for recent OTP (within last 60 seconds)
+    recent_otp = OTP.query.filter(
+        OTP.email == email,
+        OTP.purpose == "password_reset",
+        OTP.created_at > utcnow() - timedelta(seconds=60),
+    ).first()
+    if recent_otp:
+        return jsonify({"message": "A code was recently sent. Please check your inbox."}), 200
+
+    # Invalidate any previous unused OTPs for this email
+    OTP.query.filter(
+        OTP.email == email,
+        OTP.purpose == "password_reset",
+        OTP.is_used == False,
+    ).update({"is_used": True})
+    db.session.commit()
+
+    # Generate and store OTP
+    otp_code = _generate_otp()
+    otp_record = OTP(
+        id=gen_uuid(),
+        email=email,
+        otp_hash=_hash_otp(otp_code),
+        purpose="password_reset",
+        attempts=0,
+        max_attempts=5,
+        is_used=False,
+        created_at=utcnow(),
+        expires_at=utcnow() + timedelta(minutes=10),
+    )
+    db.session.add(otp_record)
+    db.session.commit()
+
+    # Send OTP email
+    sent = send_otp_email(email, otp_code, purpose="password_reset")
+
+    if not sent:
+        # Still return success to prevent information leakage
+        print(f"[WARNING] OTP email could not be sent to {email}. Code: {otp_code}")
+
+    log_security_event(
+        event_type="PASSWORD_RESET_REQUESTED",
+        user_id=user.id,
+        username=user.username,
+        status="SUCCESS",
+        metadata={"source_ip": get_client_ip()},
+    )
+
+    return jsonify(success_msg), 200
+
+
+# ──────────────────────────────────────────────
+# POST /api/auth/verify-otp — Verify OTP code
+# ──────────────────────────────────────────────
+@auth_bp.route("/verify-otp", methods=["POST"])
+def verify_otp():
+    """
+    Verify the 6-digit OTP code for password reset.
+    Returns a reset token if valid.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body is required"}), 400
+
+    email = (data.get("email") or "").strip().lower()
+    otp_code = (data.get("otp") or "").strip()
+
+    if not email or not otp_code:
+        return jsonify({"error": "Email and OTP code are required"}), 400
+
+    if len(otp_code) != 6 or not otp_code.isdigit():
+        return jsonify({"error": "OTP must be a 6-digit code"}), 400
+
+    # Find the latest unused OTP for this email
+    otp_record = OTP.query.filter(
+        OTP.email == email,
+        OTP.purpose == "password_reset",
+        OTP.is_used == False,
+    ).order_by(OTP.created_at.desc()).first()
+
+    if not otp_record:
+        return jsonify({"error": "Invalid or expired verification code"}), 400
+
+    # Check expiry
+    if utcnow() > otp_record.expires_at:
+        otp_record.is_used = True
+        db.session.commit()
+        return jsonify({"error": "Verification code has expired. Please request a new one."}), 400
+
+    # Check attempt limit
+    if otp_record.attempts >= otp_record.max_attempts:
+        otp_record.is_used = True
+        db.session.commit()
+        return jsonify({"error": "Too many failed attempts. Please request a new code."}), 429
+
+    # Verify OTP
+    otp_record.attempts += 1
+    if not _verify_otp(otp_code, otp_record.otp_hash):
+        db.session.commit()
+        remaining = otp_record.max_attempts - otp_record.attempts
+        if remaining <= 0:
+            otp_record.is_used = True
+            db.session.commit()
+            return jsonify({"error": "Too many failed attempts. Please request a new code."}), 429
+        return jsonify({"error": f"Invalid verification code. {remaining} attempts remaining."}), 400
+
+    # OTP valid — mark as used and generate a short-lived reset token
+    otp_record.is_used = True
+    db.session.commit()
+
+    # Create a short-lived token for the password reset step
+    reset_token = secrets.token_urlsafe(32)
+    # Store the reset token hash in a simple way: re-use OTP table or use a separate mechanism
+    # For simplicity, we'll use a second OTP record as the reset token
+    reset_otp = OTP(
+        id=gen_uuid(),
+        email=email,
+        otp_hash=_hash_otp(reset_token),
+        purpose="password_reset_token",
+        attempts=0,
+        max_attempts=1,
+        is_used=False,
+        created_at=utcnow(),
+        expires_at=utcnow() + timedelta(minutes=10),
+    )
+    db.session.add(reset_otp)
+    db.session.commit()
+
+    log_security_event(
+        event_type="OTP_VERIFIED",
+        status="SUCCESS",
+        metadata={"email": email, "source_ip": get_client_ip()},
+    )
+
+    return jsonify({
+        "message": "Verification code confirmed",
+        "reset_token": reset_token,
+    }), 200
+
+
+# ──────────────────────────────────────────────
+# POST /api/auth/reset-password — Set new password
+# ──────────────────────────────────────────────
+@auth_bp.route("/reset-password", methods=["POST"])
+def reset_password():
+    """
+    Reset the user's password using a valid reset token.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body is required"}), 400
+
+    email = (data.get("email") or "").strip().lower()
+    reset_token = (data.get("reset_token") or "").strip()
+    new_password = data.get("new_password", "")
+    confirm_password = data.get("confirm_password", "")
+
+    if not email or not reset_token or not new_password:
+        return jsonify({"error": "Email, reset token, and new password are required"}), 400
+
+    if new_password != confirm_password:
+        return jsonify({"error": "Passwords do not match"}), 400
+
+    if len(new_password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+    # Find and validate the reset token
+    reset_otp = OTP.query.filter(
+        OTP.email == email,
+        OTP.purpose == "password_reset_token",
+        OTP.is_used == False,
+    ).order_by(OTP.created_at.desc()).first()
+
+    if not reset_otp:
+        return jsonify({"error": "Invalid or expired reset token"}), 400
+
+    if utcnow() > reset_otp.expires_at:
+        reset_otp.is_used = True
+        db.session.commit()
+        return jsonify({"error": "Reset token has expired. Please start over."}), 400
+
+    if not _verify_otp(reset_token, reset_otp.otp_hash):
+        reset_otp.attempts += 1
+        db.session.commit()
+        return jsonify({"error": "Invalid reset token"}), 400
+
+    # Token valid — find user and update password
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    user.password_hash = hash_password(new_password)
+    user.auth_provider = "email"  # Ensure they can log in with password
+    user.failed_login_attempts = 0
+    user.is_locked = False
+    user.lockout_until = None
+
+    reset_otp.is_used = True
+    db.session.commit()
+
+    log_security_event(
+        event_type="PASSWORD_RESET_COMPLETED",
+        user_id=user.id,
+        username=user.username,
+        status="SUCCESS",
+        metadata={"source_ip": get_client_ip()},
+    )
+    log_audit(
+        action="UPDATE",
+        resource_type="user",
+        resource_id=user.id,
+        user_id=user.id,
+        details={"action": "password_reset"},
+    )
+
+    return jsonify({"message": "Password has been reset successfully"}), 200
+
+
+# ──────────────────────────────────────────────
+# POST /api/auth/logout
+# ──────────────────────────────────────────────
 @auth_bp.route("/logout", methods=["POST"])
 @token_required
 def logout():

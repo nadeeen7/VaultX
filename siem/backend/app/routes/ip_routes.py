@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from ipaddress import ip_address as validate_ip, AddressValueError
 from flask import Blueprint, jsonify, request
 from sqlalchemy import func, distinct, or_
 from app.database import db
@@ -10,10 +11,20 @@ from app.services.auth_service import token_required
 
 ip_bp = Blueprint('ip', __name__, url_prefix='/api/ip-intelligence')
 
+def _validate_ip(ip_str):
+    """Validate an IP address string. Returns the validated string or None."""
+    try:
+        addr = validate_ip(ip_str)
+        return str(addr)
+    except (AddressValueError, ValueError):
+        return None
+
 @ip_bp.route('/<ip_address>', methods=['GET'])
 @token_required
 def get_ip_details(ip_address):
     """Get detailed IP intelligence with event/alert counts and associated users."""
+    if not _validate_ip(ip_address):
+        return jsonify({'error': 'Invalid IP address', 'message': 'Please enter a valid IPv4 or IPv6 address'}), 400
     intel = get_ip_intelligence(ip_address)
 
     # Event counts
@@ -65,6 +76,8 @@ def get_ip_details(ip_address):
 @token_required
 def get_ip_events(ip_address):
     """Get recent security events for a specific IP."""
+    if not _validate_ip(ip_address):
+        return jsonify({'error': 'Invalid IP address', 'message': 'Please enter a valid IPv4 or IPv6 address'}), 400
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
 
@@ -82,6 +95,8 @@ def get_ip_events(ip_address):
 @token_required
 def get_ip_alerts(ip_address):
     """Get alerts triggered from a specific IP."""
+    if not _validate_ip(ip_address):
+        return jsonify({'error': 'Invalid IP address', 'message': 'Please enter a valid IPv4 or IPv6 address'}), 400
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
 

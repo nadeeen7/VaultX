@@ -24,6 +24,18 @@ def get_alerts():
 
     query = Alert.query
 
+    # Alert Visibility filter
+    # all = no assignment filter (default for Admin/Viewer)
+    # mine = only alerts assigned to current user
+    # unassigned = only alerts with no assignee
+    visibility = request.args.get('visibility', 'all')
+
+    if visibility == 'mine':
+        query = query.filter_by(assigned_to_id=g.current_user.id)
+    elif visibility == 'unassigned':
+        query = query.filter_by(assigned_to_id=None)
+    # visibility == 'all' → no assignment filter applied
+
     if severity:
         query = query.filter_by(severity=severity.upper())
     if status:
@@ -48,6 +60,11 @@ def get_alerts():
 @token_required
 def get_alert_detail(alert_id):
     alert = Alert.query.get_or_404(alert_id)
+
+    # RBAC: Security Analysts can only view alerts assigned to them
+    if g.current_user.role == 'Security Analyst' and alert.assigned_to_id != g.current_user.id:
+        return jsonify({'error': 'Forbidden', 'message': 'You do not have access to this alert'}), 403
+
     mitre_data = get_mitre_info(alert.mitre_technique_id)
     ip_info = get_ip_intelligence(alert.source_ip)
     recommendations = get_defensive_recommendations(alert.title, alert.severity)
@@ -74,8 +91,8 @@ def update_alert_status(alert_id):
     alert.status = new_status
     alert.updated_at = datetime.utcnow()
 
-    # Append note to audit trail
-    notes = alert.notes or []
+    # Append note to audit trail — use list() to force SQLAlchemy JSON change detection
+    notes = list(alert.notes or [])
     notes.append({
         'author': g.current_user.username,
         'text': f"Status changed from {old_status} to {new_status}.",
@@ -103,28 +120,82 @@ def update_alert_status(alert_id):
 
 @alert_bp.route('/<int:alert_id>/assign', methods=['POST'])
 @token_required
-@roles_required('Admin', 'Security Analyst')
+@roles_required('Admin')
 def assign_alert(alert_id):
     alert = Alert.query.get_or_404(alert_id)
     data = request.get_json() or {}
     user_id = data.get('user_id')
 
-    target_user = User.query.get(user_id) if user_id else g.current_user
+    # If user_id is null/empty, unassign the alert
+    if user_id is None or user_id == '' or user_id == 0:
+        old_assignee = alert.assigned_user.username if alert.assigned_user else 'Unassigned'
+        alert.assigned_to_id = None
+        alert.updated_at = datetime.utcnow()
+
+        # Create a new list to force SQLAlchemy to detect the JSON change
+        notes = list(alert.notes or [])
+        notes.append({
+            'author': g.current_user.username,
+            'text': f"Unassigned alert (was {old_assignee}).",
+            'timestamp': datetime.utcnow().isoformat()
+        })
+        alert.notes = notes
+
+        db.session.commit()
+
+        log_audit_action(
+            user_id=g.current_user.id,
+            username=g.current_user.username,
+            action=f"Unassigned Alert ALT-{alert.id} (was {old_assignee})",
+            resource_type='Alert',
+            resource_id=alert.id,
+            ip_address=request.remote_addr
+        )
+
+        try:
+            socketio.emit('alert_updated', alert.to_dict())
+        except Exception:
+            pass
+
+        return jsonify({'message': 'Alert unassigned', 'alert': alert.to_dict()}), 200
+
+    # Assign to a specific user
+    target_user = User.query.get(user_id)
     if not target_user:
         return jsonify({'error': 'User not found'}), 404
 
+    # Verify the target is a Security Analyst (Admins are not assignable as analysts)
+    if target_user.role != 'Security Analyst':
+        return jsonify({'error': 'Can only assign to Security Analyst users'}), 400
+
+    old_assignee = alert.assigned_user.username if alert.assigned_user else 'Unassigned'
     alert.assigned_to_id = target_user.id
     alert.updated_at = datetime.utcnow()
 
-    notes = alert.notes or []
+    # Create a new list to force SQLAlchemy to detect the JSON change
+    notes = list(alert.notes or [])
     notes.append({
         'author': g.current_user.username,
-        'text': f"Assigned alert to analyst {target_user.username}.",
+        'text': f"Assigned alert to analyst {target_user.username} (was {old_assignee}).",
         'timestamp': datetime.utcnow().isoformat()
     })
     alert.notes = notes
 
     db.session.commit()
+
+    log_audit_action(
+        user_id=g.current_user.id,
+        username=g.current_user.username,
+        action=f"Assigned ALT-{alert.id} to '{target_user.username}' (was {old_assignee})",
+        resource_type='Alert',
+        resource_id=alert.id,
+        ip_address=request.remote_addr
+    )
+
+    try:
+        socketio.emit('alert_updated', alert.to_dict())
+    except Exception:
+        pass
 
     return jsonify({'message': 'Alert assigned', 'alert': alert.to_dict()}), 200
 
@@ -139,7 +210,8 @@ def add_alert_note(alert_id):
     if not text:
         return jsonify({'error': 'Note text is required'}), 400
 
-    notes = alert.notes or []
+    # Create a new list to force SQLAlchemy to detect the JSON change
+    notes = list(alert.notes or [])
     notes.append({
         'author': g.current_user.username,
         'text': text,

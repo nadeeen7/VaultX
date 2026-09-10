@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import { Settings, Save, CheckCircle2 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { Settings, Save, CheckCircle2, Eye } from 'lucide-react';
 
 const SettingsPage = () => {
+  const { user } = useAuth();
   const [settings, setSettings] = useState({});
   const [savedMessage, setSavedMessage] = useState('');
   const [loading, setLoading] = useState(true);
+  const [saveError, setSaveError] = useState('');
+
+  const isAdmin = user?.role === 'Admin';
 
   const fetchSettings = async () => {
     setLoading(true);
@@ -28,19 +33,28 @@ const SettingsPage = () => {
   }, []);
 
   const handleChange = (key, val) => {
+    if (!isAdmin) return; // Prevent changes for non-Admin
     setSettings((prev) => ({ ...prev, [key]: val }));
   };
 
   const handleSave = async (e) => {
     e.preventDefault();
+    if (!isAdmin) return;
+    setSaveError('');
     try {
       await api.post('/settings', settings);
       setSavedMessage('Settings updated successfully!');
       setTimeout(() => setSavedMessage(''), 4000);
     } catch (err) {
-      console.error('Failed to save settings:', err);
+      const msg = err.response?.data?.message || err.response?.data?.error || 'Failed to save settings';
+      setSaveError(msg);
+      setTimeout(() => setSaveError(''), 5000);
     }
   };
+
+  if (loading) {
+    return <div className="p-8 text-center text-slate-400">Loading settings...</div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -49,12 +63,24 @@ const SettingsPage = () => {
           <h1 className="text-2xl font-bold text-slate-100">System & Detection Settings</h1>
           <p className="text-xs text-slate-400">Configure SIEM rule thresholds, polling frequencies, and notification webhooks</p>
         </div>
+        {!isAdmin && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs">
+            <Eye className="w-3.5 h-3.5" />
+            <span className="font-semibold">Read-Only Mode</span>
+          </div>
+        )}
       </div>
 
       {savedMessage && (
         <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4" />
           <span>{savedMessage}</span>
+        </div>
+      )}
+
+      {saveError && (
+        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
+          {saveError}
         </div>
       )}
 
@@ -74,7 +100,10 @@ const SettingsPage = () => {
                 type="number"
                 value={settings.brute_force_threshold || '5'}
                 onChange={(e) => handleChange('brute_force_threshold', e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100"
+                readOnly={!isAdmin}
+                className={`w-full border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 ${
+                  isAdmin ? 'bg-slate-900 focus:border-blue-500 focus:outline-none' : 'bg-slate-800/50 cursor-not-allowed opacity-70'
+                }`}
               />
             </div>
             <div>
@@ -85,7 +114,10 @@ const SettingsPage = () => {
                 type="number"
                 value={settings.brute_force_window_mins || '5'}
                 onChange={(e) => handleChange('brute_force_window_mins', e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100"
+                readOnly={!isAdmin}
+                className={`w-full border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 ${
+                  isAdmin ? 'bg-slate-900 focus:border-blue-500 focus:outline-none' : 'bg-slate-800/50 cursor-not-allowed opacity-70'
+                }`}
               />
             </div>
 
@@ -97,7 +129,10 @@ const SettingsPage = () => {
                 type="number"
                 value={settings.admin_abuse_threshold || '3'}
                 onChange={(e) => handleChange('admin_abuse_threshold', e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100"
+                readOnly={!isAdmin}
+                className={`w-full border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 ${
+                  isAdmin ? 'bg-slate-900 focus:border-blue-500 focus:outline-none' : 'bg-slate-800/50 cursor-not-allowed opacity-70'
+                }`}
               />
             </div>
 
@@ -109,7 +144,10 @@ const SettingsPage = () => {
                 type="number"
                 value={settings.high_freq_threshold || '20'}
                 onChange={(e) => handleChange('high_freq_threshold', e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100"
+                readOnly={!isAdmin}
+                className={`w-full border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 ${
+                  isAdmin ? 'bg-slate-900 focus:border-blue-500 focus:outline-none' : 'bg-slate-800/50 cursor-not-allowed opacity-70'
+                }`}
               />
             </div>
           </div>
@@ -131,7 +169,10 @@ const SettingsPage = () => {
                 placeholder="https://discord.com/api/webhooks/..."
                 value={settings.discord_webhook_url || ''}
                 onChange={(e) => handleChange('discord_webhook_url', e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono"
+                readOnly={!isAdmin}
+                className={`w-full border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono ${
+                  isAdmin ? 'bg-slate-900 focus:border-blue-500 focus:outline-none' : 'bg-slate-800/50 cursor-not-allowed opacity-70'
+                }`}
               />
             </div>
 
@@ -144,19 +185,24 @@ const SettingsPage = () => {
                 placeholder="https://hooks.slack.com/services/..."
                 value={settings.slack_webhook_url || ''}
                 onChange={(e) => handleChange('slack_webhook_url', e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono"
+                readOnly={!isAdmin}
+                className={`w-full border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 font-mono ${
+                  isAdmin ? 'bg-slate-900 focus:border-blue-500 focus:outline-none' : 'bg-slate-800/50 cursor-not-allowed opacity-70'
+                }`}
               />
             </div>
           </div>
         </div>
 
-        <button
-          type="submit"
-          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition-colors flex items-center gap-2 shadow-lg shadow-blue-600/20"
-        >
-          <Save className="w-4 h-4" />
-          Save Configurations
-        </button>
+        {isAdmin && (
+          <button
+            type="submit"
+            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition-colors flex items-center gap-2 shadow-lg shadow-blue-600/20"
+          >
+            <Save className="w-4 h-4" />
+            Save Configurations
+          </button>
+        )}
       </form>
     </div>
   );

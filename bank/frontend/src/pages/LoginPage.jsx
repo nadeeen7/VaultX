@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
-import { login } from "../services/api.js";
+import { login, googleLogin } from "../services/api.js";
+import { useGoogleSignIn } from "../hooks/useGoogleSignIn.js";
+import GoogleSignInButton from "../components/GoogleSignInButton.jsx";
 import Alert from "../components/Alert.jsx";
 import { Eye, EyeOff, ArrowRight, Shield } from "lucide-react";
 
@@ -22,7 +24,6 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
 
-    // Explicit client-side validation — never attempt API call with empty fields
     if (!form.username.trim()) {
       setError("Please enter your username or email");
       return;
@@ -33,9 +34,7 @@ export default function LoginPage() {
     }
 
     setLoading(true);
-
     try {
-      // ONLY navigate after backend confirms authentication
       const res = await login(form);
       loginUser(res.data.token, res.data.user);
 
@@ -47,11 +46,32 @@ export default function LoginPage() {
     } catch (err) {
       const msg = err.response?.data?.error || "Login failed. Please try again.";
       setError(msg);
-      // DO NOT navigate on failure
     } finally {
       setLoading(false);
     }
   };
+
+  // Google Sign-In callback
+  const handleGoogleCredential = useCallback(async (response) => {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await googleLogin({ credential: response.credential });
+      loginUser(res.data.token, res.data.user);
+      if (res.data.user.role === "admin") {
+        navigate("/admin");
+      } else {
+        navigate("/dashboard");
+      }
+    } catch (err) {
+      const msg = err.response?.data?.error || "Google sign-in failed. Please try again.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [loginUser, navigate]);
+
+  const { googleSignIn, isLoaded: googleLoaded } = useGoogleSignIn(handleGoogleCredential);
 
   return (
     <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12 bg-slate-50 dark:bg-slate-900">
@@ -72,8 +92,27 @@ export default function LoginPage() {
           {/* Error */}
           {error && <Alert type="error" message={error} onClose={() => setError("")} />}
 
+          {/* Google Sign-In */}
+          {googleLoaded && (
+            <div className="mt-6">
+              <GoogleSignInButton onClick={googleSignIn} loading={loading} />
+            </div>
+          )}
+
+          {/* Divider */}
+          {googleLoaded && (
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200 dark:border-slate-600" />
+              </div>
+              <div className="relative flex justify-center text-xs">
+                <span className="px-3 bg-white dark:bg-slate-800 text-gray-400 dark:text-slate-500">or sign in with email</span>
+              </div>
+            </div>
+          )}
+
           {/* Form */}
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+          <form onSubmit={handleSubmit} className={!googleLoaded ? "mt-6 space-y-4" : "space-y-4"}>
             <div>
               <label className="label">Username or Email</label>
               <input
@@ -109,6 +148,17 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
+
+            {/* Forgot Password link */}
+            <div className="flex justify-end">
+              <Link
+                to="/forgot-password"
+                className="text-sm text-accent-600 hover:text-accent-700 dark:text-accent-400 dark:hover:text-accent-300 font-medium"
+              >
+                Forgot password?
+              </Link>
+            </div>
+
             <button
               type="submit"
               disabled={loading}

@@ -21,7 +21,14 @@ def create_app(config_name=None):
 
     # Initialize extensions
     db.init_app(app)
-    CORS(app, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
+
+    # CORS configuration
+    cors_origins = app.config.get("CORS_ORIGINS", [])
+    if cors_origins:
+        CORS(app, resources={r"/api/*": {"origins": cors_origins}})
+    else:
+        # No origins configured — block cross-origin requests in production
+        CORS(app, resources={r"/api/*": {"origins": []}})
 
     # Register blueprints
     app.register_blueprint(auth_bp)
@@ -62,14 +69,27 @@ def create_app(config_name=None):
             db_ok = True
         except Exception:
             pass
+
+        siem_configured = bool(app.config.get("SIEM_API_URL"))
+
         return jsonify({
             "status": "ok",
             "service": "bank-backend",
             "database": "connected" if db_ok else "disconnected",
+            "siem_configured": siem_configured,
         }), 200
 
     # Create tables
     with app.app_context():
         db.create_all()
+
+    # Production startup warnings
+    if config_name == "production":
+        if not cors_origins:
+            print("[WARNING] CORS_ORIGINS is not set. Cross-origin requests will be blocked.")
+            print("  Set CORS_ORIGINS to your frontend URL(s), e.g.: CORS_ORIGINS=https://bank.yourdomain.com")
+        if not app.config.get("SIEM_API_URL"):
+            print("[INFO] SIEM_API_URL is not configured. Security events will be logged locally but not pushed to SIEM.")
+            print("  Set SIEM_API_URL when the SIEM backend is deployed, e.g.: SIEM_API_URL=https://siem-api.yourdomain.com")
 
     return app

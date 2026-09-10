@@ -19,10 +19,13 @@ class User(db.Model):
     id = db.Column(db.String(36), primary_key=True, default=gen_uuid)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
-    password_hash = db.Column(db.String(256), nullable=False)
+    password_hash = db.Column(db.String(256), nullable=True)  # nullable for Google-only accounts
     first_name = db.Column(db.String(80), nullable=False)
     last_name = db.Column(db.String(80), nullable=False)
     role = db.Column(db.String(20), nullable=False, default="user")  # user, admin
+    # OAuth support
+    google_id = db.Column(db.String(64), unique=True, nullable=True, index=True)
+    auth_provider = db.Column(db.String(20), nullable=False, default="email")  # email, google
     is_active = db.Column(db.Boolean, default=True)
     is_locked = db.Column(db.Boolean, default=False)
     failed_login_attempts = db.Column(db.Integer, default=0)
@@ -48,6 +51,7 @@ class User(db.Model):
             "role": self.role,
             "is_active": self.is_active,
             "is_locked": self.is_locked,
+            "auth_provider": self.auth_provider,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
         if include_email:
@@ -189,4 +193,30 @@ class AuditLog(db.Model):
             "details": self.details,
             "source_ip": self.source_ip,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class OTP(db.Model):
+    """One-time password for email verification / password reset."""
+    __tablename__ = "otp_codes"
+
+    id = db.Column(db.String(36), primary_key=True, default=gen_uuid)
+    email = db.Column(db.String(120), nullable=False, index=True)
+    otp_hash = db.Column(db.String(256), nullable=False)  # bcrypt hash of the OTP
+    purpose = db.Column(db.String(20), nullable=False, default="password_reset")  # password_reset, email_verify
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    max_attempts = db.Column(db.Integer, nullable=False, default=5)
+    is_used = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "email": self.email,
+            "purpose": self.purpose,
+            "attempts": self.attempts,
+            "is_used": self.is_used,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
         }

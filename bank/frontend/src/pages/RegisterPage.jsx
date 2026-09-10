@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
-import { register } from "../services/api.js";
+import { register, googleLogin } from "../services/api.js";
+import { useGoogleSignIn } from "../hooks/useGoogleSignIn.js";
+import GoogleSignInButton from "../components/GoogleSignInButton.jsx";
 import Alert from "../components/Alert.jsx";
 import { Eye, EyeOff, ArrowRight, Shield, Check } from "lucide-react";
 
@@ -30,7 +32,6 @@ export default function RegisterPage() {
     e.preventDefault();
     setError("");
 
-    // Explicit client-side validation — never attempt API call with invalid data
     if (!form.first_name.trim() || !form.last_name.trim()) {
       setError("First name and last name are required");
       return;
@@ -54,17 +55,33 @@ export default function RegisterPage() {
 
     setLoading(true);
     try {
-      // ONLY navigate after backend confirms registration and returns valid auth
       const res = await register(form);
       loginUser(res.data.token, res.data.user);
       navigate("/dashboard");
     } catch (err) {
       setError(err.response?.data?.error || "Registration failed. Please try again.");
-      // DO NOT navigate on failure
     } finally {
       setLoading(false);
     }
   };
+
+  // Google Sign-In callback
+  const handleGoogleCredential = useCallback(async (response) => {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await googleLogin({ credential: response.credential });
+      loginUser(res.data.token, res.data.user);
+      navigate("/dashboard");
+    } catch (err) {
+      const msg = err.response?.data?.error || "Google sign-in failed. Please try again.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [loginUser, navigate]);
+
+  const { googleSignIn, isLoaded: googleLoaded } = useGoogleSignIn(handleGoogleCredential);
 
   const passwordValid = form.password.length >= 8;
   const passwordMatch = form.password && form.password === form.confirm_password;
@@ -88,8 +105,27 @@ export default function RegisterPage() {
           {/* Error */}
           {error && <Alert type="error" message={error} onClose={() => setError("")} />}
 
+          {/* Google Sign-In */}
+          {googleLoaded && (
+            <div className="mt-6">
+              <GoogleSignInButton onClick={googleSignIn} loading={loading} />
+            </div>
+          )}
+
+          {/* Divider */}
+          {googleLoaded && (
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200 dark:border-slate-600" />
+              </div>
+              <div className="relative flex justify-center text-xs">
+                <span className="px-3 bg-white dark:bg-slate-800 text-gray-400 dark:text-slate-500">or register with email</span>
+              </div>
+            </div>
+          )}
+
           {/* Form */}
-          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+          <form onSubmit={handleSubmit} className={!googleLoaded ? "mt-6 space-y-4" : "space-y-4"}>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="label">First Name</label>

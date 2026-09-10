@@ -27,7 +27,7 @@ const navItems = [
   { name: 'IP Intelligence', path: '/ip-intelligence', icon: Globe },
   { name: 'Analytics & ML', path: '/analytics', icon: BarChart3 },
   { name: 'Reports Center', path: '/reports', icon: FileText },
-  { name: 'System Settings', path: '/settings', icon: Settings },
+  { name: 'System Settings', path: '/settings', icon: Settings, adminOnly: true },
   { name: 'User Management', path: '/users', icon: Users, adminOnly: true },
 ];
 
@@ -110,7 +110,7 @@ const Sidebar = () => {
         </div>
         <div className="font-medium text-slate-200">VaultX Bank</div>
         <div className="text-[10px] text-slate-500 font-mono mt-0.5">{statusLabels[bankStatus]}</div>
-        <div className="text-[10px] text-slate-500 font-mono mt-0.5">http://localhost:5000</div>
+        <div className="text-[10px] text-slate-500 font-mono mt-0.5">{import.meta.env.VITE_BANK_API_URL || 'SecureBank API'}</div>
       </div>
     </aside>
   );

@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
+import RoleProtectedRoute from './components/RoleProtectedRoute';
 
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
@@ -61,8 +62,20 @@ function App() {
           <Route path="/ip-intelligence" element={<IPIntelligencePage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/users" element={<UsersPage />} />
+
+          {/* Admin-only: System Settings */}
+          <Route path="/settings" element={
+            <RoleProtectedRoute roles="Admin">
+              <SettingsPage />
+            </RoleProtectedRoute>
+          } />
+
+          {/* Admin-only: User Management */}
+          <Route path="/users" element={
+            <RoleProtectedRoute roles="Admin">
+              <UsersPage />
+            </RoleProtectedRoute>
+          } />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

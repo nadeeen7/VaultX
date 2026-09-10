@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import SeverityBadge from '../components/SeverityBadge';
 import MitreBadge from '../components/MitreBadge';
 import RiskScoreGauge from '../components/RiskScoreGauge';
@@ -17,14 +18,25 @@ import {
   Fingerprint,
   Network,
   AlertTriangle,
-  Info
+  Info,
+  Eye,
+  UserCheck,
+  ChevronDown
 } from 'lucide-react';
 
 const AlertDetailPage = () => {
   const { id } = useParams();
+  const { user } = useAuth();
   const [alert, setAlert] = useState(null);
   const [newNote, setNewNote] = useState('');
   const [loading, setLoading] = useState(true);
+  const [analysts, setAnalysts] = useState([]);
+  const [selectedAnalyst, setSelectedAnalyst] = useState('');
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignMessage, setAssignMessage] = useState('');
+
+  const canModify = user?.role === 'Admin' || user?.role === 'Security Analyst';
+  const canAssign = user?.role === 'Admin';
 
   const fetchAlertDetail = async () => {
     setLoading(true);
@@ -38,9 +50,28 @@ const AlertDetailPage = () => {
     }
   };
 
+  const fetchAnalysts = async () => {
+    try {
+      const res = await api.get('/users/analysts');
+      setAnalysts(res.data.analysts || []);
+    } catch (err) {
+      console.error('Failed to fetch analysts:', err);
+    }
+  };
+
   useEffect(() => {
     fetchAlertDetail();
-  }, [id]);
+    if (canAssign) {
+      fetchAnalysts();
+    }
+  }, [id, canModify]);
+
+  // Sync selectedAnalyst with alert data
+  useEffect(() => {
+    if (alert) {
+      setSelectedAnalyst(alert.assigned_to_id || '');
+    }
+  }, [alert?.assigned_to_id]);
 
   const updateStatus = async (status) => {
     try {
@@ -48,6 +79,23 @@ const AlertDetailPage = () => {
       fetchAlertDetail();
     } catch (err) {
       console.error('Failed to update status:', err);
+    }
+  };
+
+  const assignAlert = async () => {
+    setAssignLoading(true);
+    setAssignMessage('');
+    try {
+      const payload = selectedAnalyst ? { user_id: parseInt(selectedAnalyst) } : { user_id: null };
+      const res = await api.post(`/alerts/${id}/assign`, payload);
+      setAlert(res.data.alert);
+      setAssignMessage(selectedAnalyst ? 'Alert assigned successfully' : 'Alert unassigned');
+      setTimeout(() => setAssignMessage(''), 3000);
+    } catch (err) {
+      setAssignMessage(err.response?.data?.error || 'Failed to assign alert');
+      setTimeout(() => setAssignMessage(''), 4000);
+    } finally {
+      setAssignLoading(false);
     }
   };
 
@@ -70,6 +118,7 @@ const AlertDetailPage = () => {
 
   const ipIntel = alert.ip_intelligence || {};
   const mitre = alert.mitre_details || {};
+  const assignedName = alert.assigned_to || 'Unassigned';
 
   return (
     <div className="space-y-6">
@@ -86,32 +135,39 @@ const AlertDetailPage = () => {
               <span className="px-2 py-0.5 rounded text-[10px] uppercase font-semibold bg-slate-800 border border-slate-700 text-slate-300">
                 {alert.status}
               </span>
+              {!canModify && (
+                <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] uppercase font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                  <Eye className="w-3 h-3" /> Read-Only
+                </span>
+              )}
             </div>
             <h1 className="text-xl font-bold text-slate-100 mt-0.5">{alert.title}</h1>
           </div>
         </div>
 
-        {/* Status Workflow Action Buttons */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => updateStatus('INVESTIGATING')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${alert.status === 'INVESTIGATING' ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-          >
-            Investigating
-          </button>
-          <button
-            onClick={() => updateStatus('RESOLVED')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${alert.status === 'RESOLVED' ? 'bg-emerald-600 text-white' : 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'}`}
-          >
-            <CheckCircle className="w-3.5 h-3.5" /> Resolve
-          </button>
-          <button
-            onClick={() => updateStatus('FALSE_POSITIVE')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${alert.status === 'FALSE_POSITIVE' ? 'bg-slate-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
-          >
-            <XCircle className="w-3.5 h-3.5" /> False Positive
-          </button>
-        </div>
+        {/* Status Workflow Action Buttons — only for Admin and Security Analyst */}
+        {canModify && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => updateStatus('INVESTIGATING')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${alert.status === 'INVESTIGATING' ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+            >
+              Investigating
+            </button>
+            <button
+              onClick={() => updateStatus('RESOLVED')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${alert.status === 'RESOLVED' ? 'bg-emerald-600 text-white' : 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'}`}
+            >
+              <CheckCircle className="w-3.5 h-3.5" /> Resolve
+            </button>
+            <button
+              onClick={() => updateStatus('FALSE_POSITIVE')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${alert.status === 'FALSE_POSITIVE' ? 'bg-slate-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+            >
+              <XCircle className="w-3.5 h-3.5" /> False Positive
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Main Details Grid */}
@@ -144,11 +200,46 @@ const AlertDetailPage = () => {
                   {alert.timestamp ? new Date(alert.timestamp).toLocaleString() : 'N/A'}
                 </span>
               </div>
+
+              {/* Assigned Analyst — with assignment control */}
               <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
                 <span className="text-[11px] text-slate-400 flex items-center gap-1">
                   <ShieldAlert className="w-3.5 h-3.5 text-amber-400" /> Assigned Analyst
                 </span>
-                <span className="text-sm font-semibold text-slate-100 mt-1 block">{alert.assigned_to || 'Unassigned'}</span>
+
+                {canAssign ? (
+                  <div className="mt-1.5 space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={selectedAnalyst}
+                        onChange={(e) => setSelectedAnalyst(e.target.value)}
+                        className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+                      >
+                        <option value="">Unassigned</option>
+                        {analysts.map((a) => (
+                          <option key={a.id} value={a.id}>{a.username}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      onClick={assignAlert}
+                      disabled={assignLoading}
+                      className="w-full px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
+                    >
+                      <UserCheck className="w-3 h-3" />
+                      {assignLoading ? 'Assigning...' : 'Assign Analyst'}
+                    </button>
+                    {assignMessage && (
+                      <p className={`text-[10px] font-semibold ${assignMessage.includes('Failed') || assignMessage.includes('Error') ? 'text-red-400' : 'text-emerald-400'}`}>
+                        {assignMessage}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-sm font-semibold text-slate-100 mt-1 block">
+                    {assignedName}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -356,18 +447,26 @@ const AlertDetailPage = () => {
               ))}
             </div>
 
-            <form onSubmit={addNote} className="space-y-2">
-              <input
-                type="text"
-                value={newNote}
-                onChange={(e) => setNewNote(e.target.value)}
-                placeholder="Add analyst note..."
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-              />
-              <button type="submit" className="w-full py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold">
-                Submit Note
-              </button>
-            </form>
+            {/* Note form — only for Admin and Security Analyst */}
+            {canModify ? (
+              <form onSubmit={addNote} className="space-y-2">
+                <input
+                  type="text"
+                  value={newNote}
+                  onChange={(e) => setNewNote(e.target.value)}
+                  placeholder="Add analyst note..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+                />
+                <button type="submit" className="w-full py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold">
+                  Submit Note
+                </button>
+              </form>
+            ) : (
+              <div className="p-2 rounded bg-slate-800/50 border border-slate-700/50 text-center text-xs text-slate-500">
+                <Eye className="w-3.5 h-3.5 inline mr-1" />
+                Read-only — notes require Analyst or Admin role
+              </div>
+            )}
           </div>
         </div>
       </div>

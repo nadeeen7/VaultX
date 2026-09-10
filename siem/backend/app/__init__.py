@@ -12,14 +12,10 @@ def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
 
-    # Initialize CORS - allow Bank frontend and SIEM frontend
+    # Initialize CORS - allow configured origins (Bank frontend, SIEM frontend, etc.)
     CORS(app, resources={
         r"/api/*": {
-            "origins": [
-                "http://localhost:5173",
-                "http://localhost:5174",
-                "http://localhost:5000",
-            ],
+            "origins": app.config.get('CORS_ORIGINS', []),
             "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             "allow_headers": ["Content-Type", "Authorization", "X-API-Key"],
         }
@@ -43,7 +39,7 @@ def create_app(config_class=Config):
     print(f"[Database] Using {db_label} database.")
 
     bcrypt.init_app(app)
-    socketio.init_app(app, cors_allowed_origins="*")
+    socketio.init_app(app, cors_allowed_origins=app.config.get('CORS_ORIGINS', []))
 
     # Register API blueprints
     register_routes(app)

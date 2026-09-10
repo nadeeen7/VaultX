@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import SeverityBadge from '../components/SeverityBadge';
 import {
   GitPullRequest,
@@ -8,13 +9,16 @@ import {
   ShieldAlert,
   ArrowLeft,
   CheckCircle,
-  AlertTriangle
+  AlertTriangle,
+  Eye
 } from 'lucide-react';
 
 const IncidentDetailPage = () => {
   const { id } = useParams();
+  const { user } = useAuth();
   const [incident, setIncident] = useState(null);
   const [loading, setLoading] = useState(true);
+  const canModify = user?.role === 'Admin' || user?.role === 'Security Analyst';
 
   const fetchIncidentDetail = async () => {
     setLoading(true);
@@ -69,7 +73,12 @@ const IncidentDetailPage = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          {['OPEN', 'INVESTIGATING', 'RESOLVED', 'CLOSED'].map((st) => (
+          {!canModify && (
+            <span className="flex items-center gap-1 px-2 py-1 rounded text-[10px] uppercase font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-400">
+              <Eye className="w-3 h-3" /> Read-Only
+            </span>
+          )}
+          {canModify && ['OPEN', 'INVESTIGATING', 'RESOLVED', 'CLOSED'].map((st) => (
             <button
               key={st}
               onClick={() => updateStatus(st)}

@@ -13,6 +13,16 @@ def get_users():
     users = User.query.order_by(User.created_at.desc()).all()
     return jsonify({'users': [u.to_dict() for u in users]}), 200
 
+@user_bp.route('/analysts', methods=['GET'])
+@token_required
+@roles_required('Admin', 'Security Analyst')
+def get_analysts():
+    """Return active analysts for alert assignment dropdown."""
+    analysts = User.query.filter(
+        User.role == 'Security Analyst',
+    ).order_by(User.username.asc()).all()
+    return jsonify({'analysts': [u.to_dict() for u in analysts]}), 200
+
 @user_bp.route('', methods=['POST'])
 @token_required
 @roles_required('Admin')

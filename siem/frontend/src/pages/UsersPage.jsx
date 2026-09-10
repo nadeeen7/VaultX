@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import { Users, UserPlus, Shield } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { Users, UserPlus, ShieldOff } from 'lucide-react';
 
 const UsersPage = () => {
+  const { user } = useAuth();
   const [users, setUsers] = useState([]);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -10,6 +12,8 @@ const UsersPage = () => {
   const [role, setRole] = useState('Security Analyst');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  const isAdmin = user?.role === 'Admin';
 
   const fetchUsers = async () => {
     try {
@@ -21,8 +25,8 @@ const UsersPage = () => {
   };
 
   useEffect(() => {
-    fetchUsers();
-  }, []);
+    if (isAdmin) fetchUsers();
+  }, [isAdmin]);
 
   const handleCreateUser = async (e) => {
     e.preventDefault();
@@ -48,6 +52,25 @@ const UsersPage = () => {
       console.error('Failed to update user role:', err);
     }
   };
+
+  // Safety net: non-Admin who navigates directly here
+  if (!isAdmin) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mx-auto">
+            <ShieldOff className="w-8 h-8 text-red-400" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-100">Access Denied</h2>
+            <p className="text-sm text-slate-400 mt-1">
+              User Management requires Admin privileges.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

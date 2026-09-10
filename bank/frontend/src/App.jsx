@@ -8,6 +8,7 @@ import ProtectedRoute from "./components/ProtectedRoute.jsx";
 import LandingPage from "./pages/LandingPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import RegisterPage from "./pages/RegisterPage.jsx";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import TransferPage from "./pages/TransferPage.jsx";
 import TransactionsPage from "./pages/TransactionsPage.jsx";
@@ -63,6 +64,9 @@ export default function App() {
       } />
       <Route path="/register" element={
         <PublicRoute><RegisterPage /></PublicRoute>
+      } />
+      <Route path="/forgot-password" element={
+        <PublicRoute><ForgotPasswordPage /></PublicRoute>
       } />
       <Route path="/admin/login" element={
         <PublicRoute><AdminLoginPage /></PublicRoute>

@@ -45,15 +45,34 @@ def token_required(f):
     return decorated
 
 def roles_required(*allowed_roles):
-    """Decorator to enforce role-based access control (RBAC)."""
+    """Decorator to enforce role-based access control (RBAC).
+
+    Usage:
+        @token_required
+        @roles_required('Admin')
+        def my_endpoint(): ...
+
+        @token_required
+        @roles_required('Admin', 'Security Analyst')
+        def my_endpoint(): ...
+
+    Admin always has access to all roles.
+    """
     def decorator(f):
         @wraps(f)
         def decorated(*args, **kwargs):
             if not hasattr(g, 'current_user') or not g.current_user:
-                return jsonify({'error': 'Unauthorized'}), 401
-            
-            if g.current_user.role not in allowed_roles and g.current_user.role != 'Admin':
-                return jsonify({'error': f'Forbidden: Role {g.current_user.role} lacks required permissions'}), 403
+                return jsonify({'error': 'Authentication required'}), 401
+
+            # Admin always has full access
+            if g.current_user.role == 'Admin':
+                return f(*args, **kwargs)
+
+            if g.current_user.role not in allowed_roles:
+                return jsonify({
+                    'error': 'Forbidden',
+                    'message': f'You do not have permission to perform this action. Required role: {", ".join(allowed_roles)}'
+                }), 403
 
             return f(*args, **kwargs)
         return decorated

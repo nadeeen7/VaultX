@@ -2,17 +2,20 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../services/api';
 import { socket } from '../services/socket';
+import { useAuth } from '../context/AuthContext';
 import SeverityBadge from '../components/SeverityBadge';
 import MitreBadge from '../components/MitreBadge';
-import { ShieldAlert, Filter, Search, ArrowRight, RefreshCw } from 'lucide-react';
+import { ShieldAlert, Filter, Search, ArrowRight, RefreshCw, Eye } from 'lucide-react';
 
 const AlertsPage = () => {
+  const { user } = useAuth();
   const [alerts, setAlerts] = useState([]);
   const [detectionTypes, setDetectionTypes] = useState([]);
   const [severityFilter, setSeverityFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [detectionFilter, setDetectionFilter] = useState('');
   const [searchIp, setSearchIp] = useState('');
+  const [visibilityFilter, setVisibilityFilter] = useState('all');
   const [loading, setLoading] = useState(true);
 
   const fetchAlerts = async () => {
@@ -23,7 +26,8 @@ const AlertsPage = () => {
           severity: severityFilter || undefined,
           status: statusFilter || undefined,
           source_ip: searchIp || undefined,
-          detection_rule: detectionFilter || undefined
+          detection_rule: detectionFilter || undefined,
+          visibility: visibilityFilter || undefined
         }
       });
       setAlerts(res.data.alerts);
@@ -46,9 +50,16 @@ const AlertsPage = () => {
     const handleNewAlert = (newAlert) => {
       setAlerts((prev) => [newAlert, ...prev]);
     };
+    const handleAlertUpdated = () => {
+      fetchAlerts();
+    };
     socket.on('new_alert', handleNewAlert);
-    return () => socket.off('new_alert', handleNewAlert);
-  }, [severityFilter, statusFilter, searchIp, detectionFilter]);
+    socket.on('alert_updated', handleAlertUpdated);
+    return () => {
+      socket.off('new_alert', handleNewAlert);
+      socket.off('alert_updated', handleAlertUpdated);
+    };
+  }, [severityFilter, statusFilter, searchIp, detectionFilter, visibilityFilter]);
 
   return (
     <div className="space-y-6">
@@ -85,6 +96,17 @@ const AlertsPage = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Alert Visibility Filter */}
+          <select
+            value={visibilityFilter}
+            onChange={(e) => setVisibilityFilter(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none"
+          >
+            <option value="all">All Alerts</option>
+            <option value="mine">My Assigned Alerts</option>
+            <option value="unassigned">Unassigned Alerts</option>
+          </select>
+
           <select
             value={severityFilter}
             onChange={(e) => setSeverityFilter(e.target.value)}
@@ -176,6 +198,13 @@ const AlertsPage = () => {
                 </td>
               </tr>
             ))}
+            {alerts.length === 0 && !loading && (
+              <tr>
+                <td colSpan={10} className="p-8 text-center text-slate-500">
+                  No alerts match the current filters.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

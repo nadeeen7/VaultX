@@ -17,6 +17,29 @@ const IPIntelligencePage = () => {
   const [geoStats, setGeoStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
+  const [validationError, setValidationError] = useState('');
+
+  // Validate IPv4/IPv6 addresses
+  const isValidIP = (ip) => {
+    if (!ip || !ip.trim()) return false;
+    const trimmed = ip.trim();
+    // IPv4: exactly 4 dot-separated decimal groups, each 0-255
+    const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+    const v4Match = trimmed.match(ipv4);
+    if (v4Match) {
+      return v4Match.slice(1).every(octet => {
+        const n = parseInt(octet, 10);
+        return n >= 0 && n <= 255 && String(n) === octet;
+      });
+    }
+    // IPv6: simplified check — must contain at least one colon, only hex + colons
+    if (trimmed.includes(':')) {
+      // Allow compressed forms like ::1, 2001:db8::1
+      const ipv6 = /^([0-9a-fA-F]{0,4}:){0,7}[0-9a-fA-F]{0,4}$/;
+      return ipv6.test(trimmed) || /^::([0-9a-fA-F]{0,4}:){0,6}[0-9a-fA-F]{0,4}$/.test(trimmed) || /^([0-9a-fA-F]{0,4}:){1,7}:$/.test(trimmed) || /^::$/.test(trimmed);
+    }
+    return false;
+  };
 
   const fetchIpDetails = async (ip) => {
     if (!ip) return;
@@ -64,10 +87,23 @@ const IPIntelligencePage = () => {
 
   const handleSearch = (e) => {
     e.preventDefault();
-    if (searchIp.trim()) {
-      fetchIpDetails(searchIp.trim());
-      setActiveTab('overview');
+    const ip = searchIp.trim();
+    setValidationError('');
+    if (!ip) {
+      setValidationError('Please enter an IP address.');
+      return;
     }
+    if (!isValidIP(ip)) {
+      setValidationError('Invalid IP address. Please enter a valid IPv4 or IPv6 address.');
+      return;
+    }
+    fetchIpDetails(ip);
+    setActiveTab('overview');
+  };
+
+  const handleInputChange = (e) => {
+    setSearchIp(e.target.value);
+    if (validationError) setValidationError('');
   };
 
   return (
@@ -90,25 +126,32 @@ const IPIntelligencePage = () => {
       </div>
 
       {/* Search Input */}
-      <form onSubmit={handleSearch} className="glass-panel rounded-xl p-4 flex gap-3">
-        <div className="relative flex-1">
-          <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-          <input
-            type="text"
-            placeholder="Search IP Address (e.g. 192.168.1.100 or 10.0.0.1)..."
-            value={searchIp}
-            onChange={(e) => setSearchIp(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-4 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500 font-mono"
-          />
+      <form onSubmit={handleSearch} className="glass-panel rounded-xl p-4 space-y-2">
+        <div className="flex gap-3">
+          <div className="relative flex-1">
+            <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+            <input
+              type="text"
+              placeholder="Search IP Address (e.g. 192.168.1.100 or 10.0.0.1)..."
+              value={searchIp}
+              onChange={handleInputChange}
+              className={`w-full bg-slate-900 border rounded-lg pl-9 pr-4 py-2 text-sm text-slate-100 focus:outline-none font-mono ${
+                validationError ? 'border-red-500/50 focus:border-red-500' : 'border-slate-700 focus:border-blue-500'
+              }`}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading || !searchIp.trim()}
+            className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+            Lookup IP
+          </button>
         </div>
-        <button
-          type="submit"
-          disabled={loading}
-          className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
-        >
-          {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-          Lookup IP
-        </button>
+        {validationError && (
+          <p className="text-xs text-red-400 font-semibold pl-1">{validationError}</p>
+        )}
       </form>
 
       {/* Result Display */}

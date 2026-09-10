@@ -8,6 +8,9 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'mini-siem-super-secret-jwt-key-2026-soc-defense')
     JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', SECRET_KEY)
     
+    # CORS: comma-separated list of allowed origins
+    CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:5173,http://localhost:5174,http://localhost:5000').split(',')
+    
     # Primary DB: PostgreSQL. Fallback to SQLite if PostgreSQL is unavailable.
     DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/vaultx_siem')
     SQLITE_FALLBACK_URL = os.environ.get('SQLITE_FALLBACK_URL', 'sqlite:///vaultx_siem.db')
