@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 from functools import wraps
 from flask import request, jsonify, g
 from app.models import User
+from app.logging.security_logger import log_security_event
 
 
 def hash_password(password: str) -> str:
@@ -84,8 +85,16 @@ def token_required(f):
             g.current_user = user
             g.token_data = data
         except jwt.ExpiredSignatureError:
+            log_security_event(
+                event_type="UNAUTHORIZED_ACCESS", status="BLOCKED", target="LOGIN",
+                metadata={"reason": "expired_token"},
+            )
             return jsonify({"error": "Token expired"}), 401
         except jwt.InvalidTokenError:
+            log_security_event(
+                event_type="UNAUTHORIZED_ACCESS", status="BLOCKED", target="LOGIN",
+                metadata={"reason": "invalid_token"},
+            )
             return jsonify({"error": "Invalid token"}), 401
 
         return f(*args, **kwargs)
@@ -98,12 +107,12 @@ def admin_required(f):
     @token_required
     def decorated(*args, **kwargs):
         if g.current_user.role != "admin":
-            from app.logging.security_logger import log_security_event
             log_security_event(
                 event_type="UNAUTHORIZED_ACCESS",
                 user_id=g.current_user.id,
                 username=g.current_user.username,
-                status="FAILED",
+                status="BLOCKED",
+                target="ADMIN",
                 metadata={"attempted_resource": request.endpoint},
             )
             return jsonify({"error": "Admin access required"}), 403

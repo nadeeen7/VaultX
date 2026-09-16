@@ -74,7 +74,10 @@ export default function RegisterPage() {
       loginUser(res.data.token, res.data.user);
       navigate("/dashboard");
     } catch (err) {
-      const msg = err.response?.data?.error || "Google sign-in failed. Please try again.";
+      const msg =
+        err.response?.status === 503
+          ? "Google Sign-In is not configured on this server. Set GOOGLE_CLIENT_ID in the backend .env (and VITE_GOOGLE_CLIENT_ID in the frontend .env), then restart."
+          : err.response?.data?.error || "Google sign-in failed. Please try again.";
       setError(msg);
     } finally {
       setLoading(false);

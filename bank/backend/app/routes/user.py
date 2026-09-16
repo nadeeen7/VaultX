@@ -3,6 +3,7 @@ from app.models import db, User, Transaction, LoginAttempt
 from app.auth import (
     token_required, verify_password, hash_password,
 )
+from app.services.validation import validate_password_policy, validate_name, get_json_object, clean_string
 from app.logging.security_logger import log_security_event, log_audit
 
 user_bp = Blueprint("user", __name__, url_prefix="/api/user")
@@ -24,15 +25,21 @@ def get_profile():
 def update_profile():
     """Update the current user's profile (limited fields)."""
     user = g.current_user
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Request body is required"}), 400
+    data, err = get_json_object()
+    if err:
+        return err
 
-    # Only allow updating name fields
+    # Only allow updating name fields (validated format + length)
     if "first_name" in data:
-        user.first_name = data["first_name"]
+        name = clean_string(data["first_name"], 60)
+        if not validate_name(name):
+            return jsonify({"error": "First name must be 1-60 characters"}), 400
+        user.first_name = name
     if "last_name" in data:
-        user.last_name = data["last_name"]
+        name = clean_string(data["last_name"], 60)
+        if not validate_name(name):
+            return jsonify({"error": "Last name must be 1-60 characters"}), 400
+        user.last_name = name
 
     db.session.commit()
     return jsonify({"message": "Profile updated", "user": user.to_dict()}), 200
@@ -43,9 +50,9 @@ def update_profile():
 def change_password():
     """Change the current user's password."""
     user = g.current_user
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Request body is required"}), 400
+    data, err = get_json_object()
+    if err:
+        return err
 
     current_password = data.get("current_password", "")
     new_password = data.get("new_password", "")
@@ -63,8 +70,10 @@ def change_password():
         )
         return jsonify({"error": "Current password is incorrect"}), 401
 
-    if len(new_password) < 8:
-        return jsonify({"error": "New password must be at least 8 characters"}), 400
+    # New-password policy (uppercase/lowercase/number, not just length)
+    ok, pw_error = validate_password_policy(new_password)
+    if not ok:
+        return jsonify({"error": pw_error}), 400
 
     user.password_hash = hash_password(new_password)
     db.session.commit()
@@ -91,8 +100,8 @@ def change_password():
 def get_transactions():
     """Get the current user's transaction history."""
     user = g.current_user
-    page = request.args.get("page", 1, type=int)
-    per_page = request.args.get("per_page", 20, type=int)
+    page = max(request.args.get("page", 1, type=int) or 1, 1)
+    per_page = min(max(request.args.get("per_page", 20, type=int) or 20, 1), 100)
 
     pagination = Transaction.query.filter_by(user_id=user.id) \
         .order_by(Transaction.created_at.desc()) \
@@ -112,8 +121,8 @@ def get_transactions():
 def get_login_history():
     """Get the current user's login history."""
     user = g.current_user
-    page = request.args.get("page", 1, type=int)
-    per_page = request.args.get("per_page", 20, type=int)
+    page = max(request.args.get("page", 1, type=int) or 1, 1)
+    per_page = min(max(request.args.get("per_page", 20, type=int) or 20, 1), 100)
 
     pagination = LoginAttempt.query.filter_by(user_id=user.id) \
         .order_by(LoginAttempt.created_at.desc()) \

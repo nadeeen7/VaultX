@@ -153,6 +153,10 @@ class SecurityEvent(db.Model):
     endpoint = db.Column(db.String(255), nullable=True)
     http_method = db.Column(db.String(10), nullable=True)
     status = db.Column(db.String(20), nullable=False)
+    # Severity + target added for centralized risk classification. Nullable so
+    # existing rows (and older schemas) keep working unchanged.
+    severity = db.Column(db.String(10), nullable=True)  # LOW, MEDIUM, HIGH, CRITICAL
+    target = db.Column(db.String(50), nullable=True)    # e.g. LOGIN, OTP, TRANSACTION
     metadata_json = db.Column(db.JSON, nullable=True)
 
     def to_dict(self):
@@ -167,6 +171,8 @@ class SecurityEvent(db.Model):
             "endpoint": self.endpoint,
             "http_method": self.http_method,
             "status": self.status,
+            "severity": self.severity,
+            "target": self.target,
             "metadata": self.metadata_json,
         }
 
@@ -209,6 +215,10 @@ class OTP(db.Model):
     is_used = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
     expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    # Timestamp of successful email delivery (SMTP send). NULL means the OTP
+    # was generated but never emailed — used so failed sends don't trigger the
+    # "recently sent" rate limit and block the user from retrying.
+    delivered_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     def to_dict(self):
         return {

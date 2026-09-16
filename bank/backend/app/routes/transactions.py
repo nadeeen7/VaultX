@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify, g
 from app.models import db, Transaction
 from app.auth import token_required
 from app.services.account_service import process_transfer
+from app.services.validation import get_json_object, clean_string
 from app.logging.security_logger import log_security_event, log_audit
 
 transactions_bp = Blueprint("transactions", __name__, url_prefix="/api/transactions")
@@ -12,15 +13,23 @@ transactions_bp = Blueprint("transactions", __name__, url_prefix="/api/transacti
 def create_transfer():
     """Create a new money transfer."""
     user = g.current_user
-    data = request.get_json()
-
-    if not data:
-        return jsonify({"error": "Request body is required"}), 400
+    data, err = get_json_object()
+    if err:
+        return err
 
     required = ["recipient_account", "amount"]
     missing = [f for f in required if not data.get(f)]
     if missing:
         return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
+
+    # Validate account identifier (system-generated format: VB + 10 digits)
+    recipient_account = clean_string(data["recipient_account"], 20)
+    if not recipient_account or len(recipient_account) > 20:
+        return jsonify({"error": "Invalid recipient account"}), 400
+
+    # Free-text fields: hard length caps (stored as text, rendered as text)
+    recipient_name = clean_string(data.get("recipient_name", "Unknown"), 160) or "Unknown"
+    description = clean_string(data.get("description", "Transfer"), 255) or "Transfer"
 
     try:
         amount = float(data["amount"])
@@ -37,9 +46,9 @@ def create_transfer():
         transaction = process_transfer(
             user=user,
             amount=amount,
-            recipient_account=data["recipient_account"],
-            recipient_name=data.get("recipient_name", "Unknown"),
-            description=data.get("description", "Transfer"),
+            recipient_account=recipient_account,
+            recipient_name=recipient_name,
+            description=description,
         )
 
         log_security_event(
@@ -50,7 +59,7 @@ def create_transfer():
             metadata={
                 "transaction_id": transaction.id,
                 "amount": amount,
-                "recipient_account": data["recipient_account"],
+                "recipient_account": recipient_account,
                 "reference": transaction.reference,
             },
         )
@@ -61,7 +70,7 @@ def create_transfer():
             user_id=user.id,
             details={
                 "amount": amount,
-                "recipient": data["recipient_account"],
+                "recipient": recipient_account,
             },
         )
 
@@ -78,7 +87,7 @@ def create_transfer():
             status="FAILED",
             metadata={
                 "amount": amount,
-                "recipient_account": data["recipient_account"],
+                "recipient_account": recipient_account,
                 "reason": str(e),
             },
         )
@@ -89,6 +98,6 @@ def create_transfer():
             user_id=user.id,
             username=user.username,
             status="FAILED",
-            metadata={"reason": str(e)},
+            metadata={"reason": type(e).__name__},
         )
         return jsonify({"error": "Transfer failed"}), 500

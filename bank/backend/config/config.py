@@ -26,6 +26,19 @@ class Config:
     LOCKOUT_DURATION_MINUTES = int(os.getenv("LOCKOUT_DURATION_MINUTES", "15"))
     RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 
+    # Set TRUST_PROXY=true in production (Render sits behind a reverse proxy,
+    # so remote_addr is the proxy and real client IPs come from X-Forwarded-For).
+    # Leave unset in local dev so spoofed X-Forwarded-For headers are ignored.
+    TRUST_PROXY = os.getenv("TRUST_PROXY", "").strip().lower() in ("1", "true", "yes", "on")
+
+    # Rate limiting for auth endpoints (per identifier+IP per window).
+    # Per-process limits; with 2 gunicorn workers effective limits double.
+    RATE_LIMIT_LOGIN = int(os.getenv("RATE_LIMIT_LOGIN", "10"))
+    RATE_LIMIT_REGISTER = int(os.getenv("RATE_LIMIT_REGISTER", "10"))
+    RATE_LIMIT_GOOGLE = int(os.getenv("RATE_LIMIT_GOOGLE", "15"))
+    RATE_LIMIT_FORGOT_PASSWORD = int(os.getenv("RATE_LIMIT_FORGOT_PASSWORD", "5"))
+    RATE_LIMIT_OTP = int(os.getenv("RATE_LIMIT_OTP", "10"))
+
     # SIEM integration settings (optional — Bank works fine without SIEM)
     SIEM_API_URL = os.getenv("SIEM_API_URL", "")
     SIEM_API_KEY = os.getenv("SIEM_API_KEY", "")
@@ -35,11 +48,17 @@ class Config:
     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 
     # Email / SMTP (optional — Forgot Password emails won't send without this)
-    MAIL_SERVER = os.getenv("MAIL_SERVER", "")
-    MAIL_PORT = int(os.getenv("MAIL_PORT", "587"))
-    MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
-    MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
-    MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER", "")
+    # NOTE: values are read via _mail_env() to strip accidental leading/trailing
+    # whitespace (a common cause of SMTP auth failures when pasting secrets
+    # into Render). Only whitespace is trimmed — values are never logged.
+    MAIL_SERVER = os.getenv("MAIL_SERVER", "").strip()
+    try:
+        MAIL_PORT = int((os.getenv("MAIL_PORT", "") or "587").strip())
+    except (TypeError, ValueError):
+        MAIL_PORT = 587
+    MAIL_USERNAME = os.getenv("MAIL_USERNAME", "").strip()
+    MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "").strip()
+    MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER", "").strip()
 
     # Frontend URL for email links
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
