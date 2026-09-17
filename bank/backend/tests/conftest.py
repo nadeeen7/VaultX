@@ -46,6 +46,19 @@ class TestConfig(config_by_name["development"]):
     """Development config, isolated onto a throwaway SQLite file."""
     TESTING = True
     SQLALCHEMY_DATABASE_URI = "sqlite:///" + DB_PATH
+    # The base config's engine options may include PostgreSQL-specific
+    # connect_args (connect_timeout) depending on the DATABASE_URL present
+    # when config.py was imported — sqlite3 rejects unknown connect args, so
+    # the test config always uses its own driver-neutral set. pool_pre_ping
+    # and pool_recycle are kept identical to production on purpose: the pool
+    # resilience tests below exercise them.
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 280,
+        "pool_timeout": 30,
+        "pool_size": 3,
+        "max_overflow": 5,
+    }
 
 
 config_by_name["test"] = TestConfig
