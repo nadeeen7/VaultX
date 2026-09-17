@@ -11,10 +11,13 @@ from app.routes.transactions import transactions_bp
 from app.routes.admin import admin_bp
 from app.routes.security_events import security_events_bp
 from app.logging.security_logger import log_security_event
+from app.services.email_service import mail_status
 
 # Dedicated DB-logger. Never configured to print SQL, parameters, connection
 # strings, or credentials — callers log exception TYPE plus a fixed marker only.
+# WARNING level so errors surface on Render even with an unconfigured root logger.
 _db_logger = logging.getLogger("vaultx.db")
+_db_logger.setLevel(logging.WARNING)
 
 
 def create_app(config_name=None):
@@ -43,18 +46,18 @@ def create_app(config_name=None):
     app.register_blueprint(admin_bp)
     app.register_blueprint(security_events_bp)
 
-    # Mail configuration check: verify required variables are PRESENT at startup.
-    # Logs only variable NAMES — never values.
-    missing_mail_vars = [
-        name for name in ("MAIL_SERVER", "MAIL_PORT", "MAIL_USERNAME",
-                          "MAIL_PASSWORD", "MAIL_DEFAULT_SENDER")
-        if not app.config.get(name)
-    ]
-    if missing_mail_vars:
+    # Mail configuration check: verify a usable email transport (HTTP API or
+    # SMTP) is PRESENT at startup. Logs only variable NAMES — never values.
+    mail_ok, missing_mail_vars = mail_status()
+    if not mail_ok:
         print(f"[MAIL] WARNING: mail configuration incomplete. Missing variables: {', '.join(missing_mail_vars)}")
         print("[MAIL] Forgot-password OTP emails will fail until these are set.")
+        print("[MAIL] Recommended on Render: set RESEND_API_KEY (or BREVO/SENDGRID) + MAIL_DEFAULT_SENDER —")
+        print("[MAIL] outbound SMTP (Gmail port 587) is commonly unreachable from Render containers.")
+    elif os.getenv("EMAIL_PROVIDER", "").strip().lower() in ("resend", "brevo", "sendgrid") or os.getenv("RESEND_API_KEY") or os.getenv("BREVO_API_KEY") or os.getenv("SENDGRID_API_KEY"):
+        print("[MAIL] Mail configuration present (HTTP email API over port 443 — works where SMTP egress is blocked).")
     else:
-        print(f"[MAIL] Mail configuration present (server host configured, port {app.config.get('MAIL_PORT')}).")
+        print(f"[MAIL] Mail configuration present (SMTP server configured, port {app.config.get('MAIL_PORT')}).")
 
     # Security headers on every response. The backend serves a JSON API only,
     # so a restrictive CSP is safe here (the React app is served separately and
@@ -153,12 +156,7 @@ def create_app(config_name=None):
             pass
 
         siem_configured = bool(app.config.get("SIEM_API_URL"))
-        mail_configured = bool(
-            app.config.get("MAIL_SERVER")
-            and app.config.get("MAIL_USERNAME")
-            and app.config.get("MAIL_PASSWORD")
-            and app.config.get("MAIL_DEFAULT_SENDER")
-        )
+        mail_configured = bool(mail_status()[0])
 
         return jsonify({
             "status": "ok",
@@ -182,7 +180,7 @@ def create_app(config_name=None):
             print("  Set SIEM_API_URL when the SIEM backend is deployed, e.g.: SIEM_API_URL=https://siem-api.yourdomain.com")
         if not app.config.get("TRUST_PROXY"):
             print("[INFO] TRUST_PROXY is not enabled. Client IPs will come from remote_addr; enable it when running behind a reverse proxy (e.g. Render).")
-        _db_logger.info(
+        _db_logger.warning(
             "[DB] Production DB engine ready: pool_pre_ping=True, pool_recycle=%ss, pool_timeout=%ss, pool_size=%s, max_overflow=%s. "
             "SQL mode: %s. Connection URL is not logged.",
             app.config["SQLALCHEMY_ENGINE_OPTIONS"]["pool_recycle"],
