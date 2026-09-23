@@ -9,7 +9,7 @@ from app.auth import (
     get_client_ip, get_user_agent, token_required,
 )
 from app.services.account_service import create_account_for_user
-from app.services.email_service import send_otp_email
+from app.services.email_service import send_otp_email, mail_diagnostic
 from app.services.validation import (
     validate_password_policy, validate_email, validate_username, validate_name,
     get_json_object,
@@ -485,23 +485,26 @@ def forgot_password():
     # Format check only — response stays identical whether or not the email exists.
     if not validate_email(email):
         return jsonify({"error": "Invalid email address"}), 400
+    mail_diagnostic("reset_request")
     user = User.query.filter_by(email=email).first()
 
     # Always return the same response to prevent email enumeration
     success_msg = {"message": "If that email is registered, a verification code has been sent."}
 
     if not user:
-        # Don't reveal whether email exists
+        # Do not log identifiers or distinguish account eligibility reasons.
+        mail_diagnostic("reset_result", result="not_dispatched")
         return jsonify(success_msg), 200
 
     # Check if user has a password (Google-only accounts can't use this)
     if not user.password_hash and user.auth_provider == "google":
+        mail_diagnostic("reset_result", result="not_dispatched")
         return jsonify(success_msg), 200
 
     # Rate limit: check for recent OTP (within last 60 seconds).
     # Only treat OTPs as "recently sent" if they were actually delivered —
     # otherwise a failed email send blocks the user from retrying for 60s.
-    # `delivered_at` is set by the email service only after a successful SMTP send.
+    # `delivered_at` is set below only after the provider accepts the send.
     recent_otp = OTP.query.filter(
         OTP.email == email,
         OTP.purpose == "password_reset",
@@ -509,7 +512,8 @@ def forgot_password():
         OTP.delivered_at > _as_aware(utcnow()) - timedelta(seconds=60),
     ).first()
     if recent_otp:
-        return jsonify({"message": "A code was recently sent. Please check your inbox."}), 200
+        mail_diagnostic("reset_result", result="not_dispatched")
+        return jsonify(success_msg), 200
 
     # Invalidate any previous unused OTPs for this email
     OTP.query.filter(
@@ -535,22 +539,14 @@ def forgot_password():
     db.session.add(otp_record)
     db.session.commit()
 
-    # Send OTP email
-    # NOTE: the response only reveals that the account exists via delivery
-    # outcomes — the generic message below never changes based on result.
+    # Keep provider outcomes internal; the public response must not reveal eligibility.
     sent, reason = send_otp_email(email, otp_code, purpose="password_reset")
-
     if not sent:
-        # Email delivery failed. Do NOT pretend it succeeded: return an error
-        # so the user can retry, and log a safe reason (never OTP values,
-        # credentials, or SMTP secrets).
-        print(f"[MAIL] Forgot-password email delivery failed for a request (reason={reason})")
-        return jsonify({
-            "error": "We could not send the verification email right now. Please try again shortly."
-        }), 503
+        mail_diagnostic("reset_result", result="delivery_failed")
+        return jsonify(success_msg), 200
 
-    # Mark the OTP as delivered (only on successful SMTP send) so the
-    # "recently sent" rate limit is based on real deliveries.
+    mail_diagnostic("reset_result", result="provider_accepted")
+    # Provider acceptance is not proof of inbox delivery. Preserve cooldown semantics.
     otp_record.delivered_at = _as_aware(utcnow())
     db.session.commit()
 
