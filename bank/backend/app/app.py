@@ -11,7 +11,7 @@ from app.routes.transactions import transactions_bp
 from app.routes.admin import admin_bp
 from app.routes.security_events import security_events_bp
 from app.logging.security_logger import log_security_event
-from app.services.email_service import mail_status
+from app.services.email_service import mail_status, log_mail_configuration
 
 # Dedicated DB-logger. Never configured to print SQL, parameters, connection
 # strings, or credentials — callers log exception TYPE plus a fixed marker only.
@@ -46,18 +46,8 @@ def create_app(config_name=None):
     app.register_blueprint(admin_bp)
     app.register_blueprint(security_events_bp)
 
-    # Mail configuration check: verify a usable email transport (HTTP API or
-    # SMTP) is PRESENT at startup. Logs only variable NAMES — never values.
-    mail_ok, missing_mail_vars = mail_status()
-    if not mail_ok:
-        print(f"[MAIL] WARNING: mail configuration incomplete. Missing variables: {', '.join(missing_mail_vars)}")
-        print("[MAIL] Forgot-password OTP emails will fail until these are set.")
-        print("[MAIL] Recommended on Render: set RESEND_API_KEY (or BREVO/SENDGRID) + MAIL_DEFAULT_SENDER —")
-        print("[MAIL] outbound SMTP (Gmail port 587) is commonly unreachable from Render containers.")
-    elif os.getenv("EMAIL_PROVIDER", "").strip().lower() in ("resend", "brevo", "sendgrid") or os.getenv("RESEND_API_KEY") or os.getenv("BREVO_API_KEY") or os.getenv("SENDGRID_API_KEY"):
-        print("[MAIL] Mail configuration present (HTTP email API over port 443 — works where SMTP egress is blocked).")
-    else:
-        print(f"[MAIL] Mail configuration present (SMTP server configured, port {app.config.get('MAIL_PORT')}).")
+    # Presence and actual provider selection only; no credentials or addresses.
+    log_mail_configuration()
 
     # Security headers on every response. The backend serves a JSON API only,
     # so a restrictive CSP is safe here (the React app is served separately and
