@@ -1,19 +1,14 @@
 import os
 import re
+import json
+import uuid
+from flask import g, has_request_context
 import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 import requests as http_requests
-
-# Redact anything that looks like a credential inside exception text:
-# "AUTHENTICATE PLAIN <b64>", "User ... <token>", long base64/hex-ish chunks,
-# and anything following "password", "token", or "auth".
-_B64_RE = re.compile(r"[A-Za-z0-9+/=_-]{16,}")
-_SECRET_WORD_RE = re.compile(
-    r"(?i)(password|passwd|token|auth\w*)\s*[:=]?\s*\S+"
-)
 
 # HTTP email APIs (port 443) used when outbound SMTP is unreachable —
 # e.g. Render, where connecting to smtp.gmail.com:587 fails with
@@ -27,17 +22,31 @@ _API_KEY_VAR = {
 
 
 def _sanitize_exception(e: Exception) -> str:
-    """
-    Return a short, safe exception description for logging.
-    Never include SMTP credentials, passwords, or OTP values.
-    """
-    parts = [type(e).__name__]
-    message = " ".join(str(e).split())
-    if message:
-        message = _SECRET_WORD_RE.sub(lambda m: m.group(1) + ": [REDACTED]", message)
-        message = _B64_RE.sub("[REDACTED]", message)
-        parts.append(message[:200])
-    return ": ".join(parts)
+    # Exception messages can contain short OTPs, recipient addresses or bodies.
+    # Do not try to redact arbitrary exception text.
+    return type(e).__name__
+
+
+def mail_diagnostic(stage, **fields):
+    """Internal diagnostics: callers supply only fixed labels/counts, never mail data."""
+    if has_request_context():
+        if not getattr(g, "mail_trace_id", None):
+            g.mail_trace_id = uuid.uuid4().hex
+        fields["trace_id"] = g.mail_trace_id
+    print("[MAIL] " + json.dumps(dict(stage=stage, **fields), sort_keys=True), flush=True)
+
+
+def log_mail_configuration():
+    """Log actual selection and presence flags, never environment values."""
+    provider, _, _, missing = _resolve_provider()
+    forced = (os.getenv("EMAIL_PROVIDER", "") or "").strip().lower()
+    configured = forced if forced in (*_API_PROVIDERS, "smtp") else ("auto" if not forced else "invalid")
+    revision = os.getenv("RENDER_GIT_COMMIT", "")
+    mail_diagnostic("configuration", configured_provider=configured,
+                    selected_provider=provider or "none", missing=missing,
+                    resend_key_present=bool(os.getenv("RESEND_API_KEY", "").strip()),
+                    default_sender_present=bool(os.getenv("MAIL_DEFAULT_SENDER", "").strip()),
+                    revision=revision if re.fullmatch(r"[0-9a-f]{40}", revision) else "unavailable")
 
 
 def _missing_mail_vars() -> list:
@@ -167,13 +176,14 @@ def _send_via_smtp(to_email: str, subject: str, body_text: str, body_html: str) 
     server = None
     try:
         server = _smtp_connect(mail_server, mail_port)
-        print(f"[MAIL] SMTP connection successful (server={mail_server}, port={mail_port}, tls=yes)")
+        mail_diagnostic("transport_connected", provider="smtp")
         server.login(mail_username, mail_password)
         server.sendmail(mail_default_sender, [to_email], msg.as_string())
+        mail_diagnostic("transport_result", provider="smtp", result="accepted")
         return True, ""
     except Exception as e:
-        # Log the exception TYPE plus a sanitized message — never credentials.
-        print(f"[MAIL] Email send failed: {_sanitize_exception(e)}")
+        # Log only the exception type, never its message.
+        mail_diagnostic("transport_result", provider="smtp", result="exception", error_type=_sanitize_exception(e))
         return False, "smtp_error"
     finally:
         if server is not None:
@@ -229,18 +239,19 @@ def _send_via_api(provider: str, api_key: str, from_email: str, to_email: str,
             ],
         }
 
+    mail_diagnostic("transport_attempt", provider=provider, transport="https")
     try:
         resp = http_requests.post(url, json=payload, headers=headers, timeout=10)
     except Exception as e:
-        print(f"[MAIL] {provider} API send failed: {_sanitize_exception(e)}")
+        mail_diagnostic("transport_result", provider=provider, result="exception", error_type=_sanitize_exception(e))
         return False, "api_error"
 
     if resp.status_code not in (200, 201, 202):
         # Status only — response bodies can echo addresses; keys are in headers.
-        print(f"[MAIL] {provider} API send failed: HTTP {resp.status_code}")
+        mail_diagnostic("transport_result", provider=provider, result="rejected", http_status=resp.status_code)
         return False, "api_error"
 
-    print(f"[MAIL] {provider} API send successful (port 443)")
+    mail_diagnostic("transport_result", provider=provider, result="accepted", http_status=resp.status_code)
     return True, ""
 
 
@@ -314,8 +325,7 @@ def send_otp_email(to_email: str, otp_code: str, purpose: str = "password_reset"
       - "api_error"         HTTP email API call failed
     This function NEVER logs credentials, passwords, API keys, or OTP values.
     """
-    print("[MAIL] Attempting to send password reset email" if purpose == "password_reset"
-          else "[MAIL] Attempting to send verification email")
+    log_mail_configuration()
 
     subject, body_text, body_html = _build_email(otp_code, purpose)
 
@@ -332,6 +342,5 @@ def send_otp_email(to_email: str, otp_code: str, purpose: str = "password_reset"
         sent, reason = _send_via_smtp(to_email, subject, body_text, body_html)
 
     if sent:
-        print("[MAIL] Password reset email sent successfully" if purpose == "password_reset"
-              else "[MAIL] Verification email sent successfully")
+        mail_diagnostic("send_result", result="accepted", provider=provider)
     return sent, reason
